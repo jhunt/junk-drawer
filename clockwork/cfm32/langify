@@ -1,0 +1,29 @@
+#!/usr/bin/perl
+
+# Usage: langify NAME < src/lang.c
+
+my $LANGUAGE = $ARGV[0];
+if (!$LANGUAGE) {
+	printf STDERR "Usage: $0 LANG < src/lang.c\n";
+	exit 1;
+}
+
+my $ROOT = "src/$LANGUAGE";
+mkdir $ROOT;
+
+my $fh = \*STDOUT;
+
+while (<STDIN>) {
+	s/%{LANGUAGE}/$LANGUAGE/g;
+	s/%{ROOT}/$ROOT/g;
+
+	if (m/==+\[\s+(.*)\s+\]==+/) {
+		my $file = $1;
+		close $fh;
+		open $fh, ">", $file
+			or die "Failed to open $file for writing: $!\n";
+		next;
+	}
+
+	print $fh $_;
+}

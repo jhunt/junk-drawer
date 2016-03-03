@@ -1,0 +1,33 @@
+digraph fsm {
+
+	node [shape=rect]
+	edge [length=20]
+
+		INIT -> HELO
+
+	{ edge [color=blue]
+		HELO -> HELO
+		CODE -> HELO
+		FILE -> HELO
+		DATA -> HELO
+	}
+
+	{ edge [color=red]
+		HELO -> CODE
+		CODE -> CODE
+		FILE -> CODE
+		DATA -> CODE
+	}
+
+	{ edge [color=darkgreen]
+		CODE -> FILE
+		FILE -> FILE
+		DATA -> FILE
+	}
+
+	{ edge [color=purple]
+		FILE -> DATA
+		DATA -> DATA
+	}
+
+}

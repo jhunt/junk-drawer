@@ -1,0 +1,326 @@
+Clockwork Mesh - Remote Orchestration Framework
+===============================================
+
+                         .------ [ cogd ]
+                        /
+        [ meshd ] ------------- [ cogd ]
+            |        \     \
+            |         \     `--- [ cogd ]
+   [ cogd ]-'          \
+                        `------- [ cogd ]
+
+
+Mesh is the distributed orchestration framework for Clockwork.
+At its heart is the interaction between meshd(1) and cogd(1).
+
+Each cogd(1) subscribes to all configured meshd(1) instances,
+on a PUB/SUB socket.  The same keypair will be used for the
+PUB/SUB endpoint as for the REQ/REP endpoint.
+
+ACCESS CONTROL
+--------------
+
+Mesh has two ACLs,  a global ACL that is checked at clockd+cogd,
+and a local ACL that is only checked at cogd.
+
+    /etc/clockwork/global.acl
+      # global ACL
+      allow %systems ALL final
+      allow ALL "show acl" final
+
+The local ACL is configured in the clockwork CFM policies, via
+new 'allow' and 'deny' directives:
+
+    policy "baseline" {
+        package "sudo" { version: "latest" }
+        # ... etc ...
+
+        allow someuser "show version";
+        allow %agroup  "query package *";
+        allow %cimdb   "query *" final;
+
+        allow %devs    "query *";
+        deny  %devs    "query service *";
+    }
+
+(NOTE: we should make the parser allow optional ';' terminators)
+
+As CFM runs play out, they collect the allow and deny rules, in
+order, and populate the local ACL with the final list (which is
+both written to disk and stored in memory).  The global ACL is
+included in this by clockd, which will insert its global ACLs in
+every policy it generates, before all policy-specific ones.
+
+The tokens 'allow', 'deny', final' and 'ALL' should be highlighted
+as keywords and m/%[a-zA-Z0-9_]+/ as identifiers.
+
+
+COMMAND LANGUAGE
+----------------
+
+Commands are handled much like shell commands:
+
+    command arg arg arg ...
+
+The parser will pass all arguments to the built-in command handler
+to generate the requisite Pendulum code snippet.
+
+Known / Planned comands include:
+
+  ping
+  show     <sub-mode>
+  query    <sub-mode>
+  fact     (reload)? name1 [name2 ...]
+  facts    (reload)?
+  package  (install|remove) name
+  service  (start|stop|restart) name
+  exec     (command) [args...]
+  session  kick username
+  cfm      (run|copydown)
+
+The 'show' handler has the following sub-modes:
+
+  acl     (for user|for %group)?
+  acls
+  version
+  runtime
+  stats
+  uname   (arch|os|kernel|nodename)?
+  env     varname
+
+The 'query' handler has the following sub-modes:
+
+  package (version|latest) name
+  service (enabled|running) name
+  sysctl  sys.ctl.key
+  file    (present|sha1|md5|owner|mode|size|mtime|ctime)
+  user    (present|id|groups|shell|gecos|locked) user
+  uid     (present|name) number
+  group   (present|id|members|admins) name
+  gid     (present|name) number
+  host    (present|ip|aliases) hostname
+  process (running|stats|pid) search
+  session (count)? username
+  socket  (bound|pid|process) scheme:port
+
+
+COMMAND MATCHING
+----------------
+
+Commands in ACLs can be specified in with glob-match semantics.
+
+For example, "query package *" means allow any command where the
+command name is 'query' and the first argument is 'package'.  This
+would match "query package" and "query package latest sysstat".
+
+The '*' (glob, asterisk, star) token matches any number of distinct
+tokens (including zero), and can appear anywhere in the pattern.
+Thus, the pattern "* kick *" is allowed, and it matches the following:
+
+    query package latest kick
+    session kick root
+    service restart kick
+
+As such, most patterns shouldn't start with a '*' (although it is
+perfectly legal and has valid meaning).
+
+The one notable exception is the ALL-pattern, "*", which matches any
+and all candidate command strings.  The keyword ALL is a syntactic
+alias for "*".
+
+
+AUTHENTICATION
+--------------
+
+All client requests present their username/password credentials,
+which are validated against the local system authentication backend.
+
+We may want a separate PAM stack for this.
+
+Once validated, group information will be looked up, for use in ACL
+traversal.
+
+A client wishing to execute on a cog must talk to clockd,
+and put in a request for execution, which consists of:
+
+   +---------------------+
+ 0 | REQUEST             |   The literal string "REQUEST"
+   +---------------------+
+ 1 | juser               |   Username of the requester
+   +---------------------+
+ 2 | super.secret        |   Password for the above user account
+   +---------------------+
+ 3 | show version        |   Command to run
+   +---------------------+
+ 4 | sys.fqdn=/web\d+/\n |   Filters, newline-terminated
+   | sys.distro=/Ubu/\n  |
+   +---------------------+
+
+First, clockd will have to authenticate the supplied credentials, using
+the local system authentication PAM configuration, for the 'clockwork'
+service.
+
+Error packets look like this:
+
+   +---------------------+
+ 0 | ERROR               |
+   +---------------------+
+ 1 | Error string...     |
+   +---------------------+
+
+If everything checks out, clockd will turn around and PUBlish out the
+query, in a PDU that looks like this:
+
+   +---------------------+
+ 0 | COMMAND             |   The literal string "COMMAND"
+   +---------------------+
+ 1 | 1234567890abcdef012 |   A unique serial number for this command
+   +---------------------+
+ 2 | juser:group1:group2 |   Requester identity, user:group[:group...]
+   +---------------------+
+ 3 | show version        |   Command in its original form (for ACLs)
+   +---------------------+
+ 4 | ;; pendulum code    |   Pendulum code that implements that command
+   | GET VERSION         |
+   | PRINT "%s\n"        |
+   +---------------------+
+ 5 | sys.fqdn=/web\d+/\n |   Filters, newline-terminated
+   | sys.distro=/Ubu/\n  |
+   +---------------------+
+
+A confirmation packet is then sent back to the client, with the serial number:
+
+   +---------------------+
+ 0 | SUBMITTED           |
+   +---------------------+
+ 1 | 1234567890abcdef012 |
+   +---------------------+
+
+Each cogd would reply to clockd with a packet like this:
+
+   +---------------------+
+ 0 | RESULT              |   The literal string "RESULT"
+   +---------------------+
+ 1 | 1234567893abcdef012 |   Serial number for the parent command
+   +---------------------+
+ 2 | host01.fq.dn        |   FQDN
+   +---------------------+
+ 3 | 0                   |   Status code (0 == success, !0 == fail)
+   +---------------------+
+ 4 | 1.3.6\n             |
+   +---------------------+
+
+or (in case a filter excluded the cogd)
+
+   +---------------------+
+ 0 | OPTOUT              |   The literal string "OPTOUT"
+   +---------------------+
+ 1 | 1234567890abcdef012 |   Serial number for the parent command
+   +---------------------+
+ 2 | host01.fq.dn        |   FQDN
+   +---------------------+
+
+clockd will then stream those replies back to the client, with additional
+frames that identify the remote system:
+
+   +---------------------+
+ 0 | RESULT              |   The literal string "RESULT"
+   +---------------------+
+ 1 | host01.fq.dn        |   FQDN of the responding host
+   +---------------------+
+ 2 | 0                   |   Status code (0 == success, !0 == fail)
+   +---------------------+
+ 3 | 1.3.6\n             |
+   +---------------------+
+
+or (in case a filter excluded the cogd)
+
+   +---------------------+
+ 0 | OPTOUT              |   The literal string "OPTOUT"
+   +---------------------+
+ 1 | host01.fq.dn        |   FQDN of the responding host
+   +---------------------+
+
+ENCRPYTION
+----------
+
+Communication between a client and the clockd will be encrypted, with
+a permanent server-side private key (public key known to the client)
+and an ephemeral public/private key on the client side.  clockd will
+trust all valid keys from Mesh clients.
+
+
+THE cw-run UTILITY
+------------------
+
+A new command-line tool, cw-run(1) will serve as the client to Mesh.
+
+    cw-run query package version sysstat
+
+    cw-run --where 'sys.fqdn=/web/' query service httpd status
+
+    cw-run -w 'sys.fqdn=/web/' -w 'sys.distro=/Ubuntu/' service httpd restart
+
+    cw-run -d ALL show version
+    cw-run -d chicago show version
+
+    cw-run show acl
+    cw-run show acl for %systems
+    cw-run show acls
+
+    cw-run --show-all --format yaml show acls > audit.$(date).yml
+    cw-run --show-all --format json show acls > audit.$(date).json
+
+The client cw-run(1) will be responsible for submitting requests to multiple
+domains in parallel, one master in each domain it is configured with:
+
+  timeout 15
+
+  chicago
+    master1.aws.ord.fq.dn
+    master2.aws.ord.fq.dn
+
+  california
+    master1.l3.sfo.fq.dn
+    master2.l3.sfo.fq.dn
+
+In this case, cw-run(1) would try to connect initially to master1.aws.ord.fq.dn
+and master1.l3.sfo.fq.dn.  If the latter host does not respond within 15s,
+cw-run(1) would then move on to the next master, master2.l3.so.fq.dn.
+
+Ultimately, cw-run(1) is responsible for gathering credentials, sending them to
+its upstream masters, and combining the results back together and displaying
+them to stdout, in whatever format the caller asked for.
+
+
+NOTES ON IMPLEMENTATION
+-----------------------
+
+The following new clusters of functionality need to be implemented to make
+Mesh feasible:
+
+  1. ACLs (parsing + traversing)              acl_*
+  2. Commands (parsing + matching + codegen)  cmd_*
+  3. Filtering (parsing + matching)           filter_*
+
+Thoughts on ACLs in particular
+
+  1. Support new ACL definitions in-policy
+  2. Track ACLs, in order, in policy objects (new NODE type, new list)
+  3. Transform ACLs into Pendulum code (acl_gencode)
+  4. Callbacks in uf_* for handling ACLs
+  5. Collect / write / update ACLs in cogd
+  6. New config options for acl file (/etc/clockwork/local.acl and
+                                      /etc/clockwork/global.acl)
+
+Functions
+
+  cmd_parse(const char*)
+  cmd_gencode(cmd_t*)
+
+  acl_parse(const char*)
+  acl_match(const char* u, cmd_t*)
+  acl_gencode(acl_t*)
+
+  filter_parse(const char*)
+  filter_match(filter_t*, cw_hash_t *facts)
