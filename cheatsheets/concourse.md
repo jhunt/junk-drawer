@@ -47,6 +47,7 @@ resources:
     type: semver
     source:
       driver: s3 # optional, default
+      key: version
       bucket: bucket-name
       access_key_id: ACCESS_KEY
       secret_access_key: SECRET_KEY
