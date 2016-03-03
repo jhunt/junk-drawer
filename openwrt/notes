@@ -1,0 +1,23 @@
+OpenWRT Buildroot
+=================
+
+  sudo apt-get install libncurses5-dev
+
+  git clone git://git.openwrt.org/12.09/openwrt.git
+  cd openwrt
+  make defconfig
+  make prereq
+  make menuconfig
+
+brcm47xx is the target arch for the linksys
+It's listed as "Broadcom BCM947xx ..."
+
+  make -j5
+
+Downloaded the Makefiles from https://github.com/filefrog/openwrt-pkg
+into packages/libzmq3 and packages/tinybolo
+
+  make menuconfig               # activate libzmq3 and tinybolo as <M>odules
+  make package/libzmq3/compile
+  make package/tinybolo/compile
+  make package/index
