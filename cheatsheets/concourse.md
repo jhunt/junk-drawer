@@ -4,7 +4,7 @@ Concourse Cheatsheet
 Task
 ----
 
-```
+```yml
 jobs:
   - name: do-stuff
     plan:
@@ -25,7 +25,7 @@ jobs:
 Git Resource
 ------------
 
-```
+```yml
 resources:
   - name: my-git-repo
     type: git
@@ -41,7 +41,7 @@ resources:
 Version Resource
 ----------------
 
-```
+```yml
 resources:
   - name: my-version
     type: semver
